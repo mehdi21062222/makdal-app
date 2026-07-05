@@ -28,6 +28,11 @@ const WEEK_CA = [
   {j:"Jeu",ca:6300},{j:"Ven",ca:7800},{j:"Sam",ca:9200},{j:"Dim",ca:3500},
 ];
 
+function getTodayStr() {
+  const d = new Date();
+  if (d.getHours() < 10) d.setDate(d.getDate() - 1);
+  return d.toISOString().split("T")[0];
+}
 function getRestaurantDay() {
   const now = new Date();
   if (now.getHours() < 10) now.setDate(now.getDate()-1);
@@ -63,8 +68,6 @@ function Field({label,children}) {
 }
 
 const initRestaurantData = () => ({
-  caJour: "",
-  depenses: [],
   employees: [],
   avances: [],
   historique: {},
@@ -75,7 +78,11 @@ export default function MakDal() {
   const [restoData, setRestoData] = useState(() => {
     try {
       const saved = localStorage.getItem('makdal_data');
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        Object.keys(parsed).forEach(k => { delete parsed[k].caJour; delete parsed[k].depenses; });
+        return parsed;
+      }
     } catch(e) {}
     return { oujda: initRestaurantData(), saidia: initRestaurantData() };
   });
@@ -91,6 +98,7 @@ export default function MakDal() {
   const [activeRapportTab, setActiveRapportTab] = useState("stats");
   const [calMonth, setCalMonth] = useState(()=>{const d=new Date();return{year:d.getFullYear(),month:d.getMonth()};});
   const [calSelectedDay, setCalSelectedDay] = useState(null);
+  const [calCaInput, setCalCaInput] = useState("");
 
   const [empModal, setEmpModal] = useState(null);
   const [depModal, setDepModal] = useState(null);
@@ -99,29 +107,33 @@ export default function MakDal() {
 
   const fileRef = useRef();
 
-  // 💾 Sauvegarde automatique — rien ne disparaît jamais
   useEffect(() => {
     try {
       localStorage.setItem('makdal_data', JSON.stringify(restoData));
     } catch(e) {}
   }, [restoData]);
 
+  const todayStr = getTodayStr();
 
   const emptyEmp = {name:"",role:"Caissier",team:"A",salaire:""};
-  const emptyDep = {fournisseur:"",montant:"",categorie:"Fournisseurs alimentaires",produits:"",date:new Date().toISOString().split("T")[0]};
-  const emptyAvance = {empId:"",montant:"",date:new Date().toISOString().split("T")[0],note:"",rembourse:false};
+  const emptyDep = {fournisseur:"",montant:"",categorie:"Fournisseurs alimentaires",produits:"",date:todayStr};
+  const emptyAvance = {empId:"",montant:"",date:todayStr,note:"",rembourse:false};
   const [empForm, setEmpForm] = useState(emptyEmp);
   const [depForm, setDepForm] = useState(emptyDep);
   const [avanceForm, setAvanceForm] = useState(emptyAvance);
 
-  // Helpers to get/set per-restaurant data
   const rd = restoData[activeResto];
   const setRd = (updater) => setRestoData(prev => ({
     ...prev,
     [activeResto]: typeof updater === "function" ? updater(prev[activeResto]) : updater
   }));
 
-  const { caJour, depenses, employees, avances, historique } = rd;
+  const { employees, avances, historique } = rd;
+
+  const todayEntry = historique[todayStr] || { ca: 0, depenses: [] };
+  const caJour = todayEntry.ca || 0;
+  const depenses = todayEntry.depenses || [];
+
   const caVal = Number(caJour)||0;
   const totalDep = depenses.reduce((s,d)=>s+Number(d.montant),0);
   const benefice = caVal - totalDep;
@@ -133,16 +145,30 @@ export default function MakDal() {
 
   const notify = (msg) => { setNotif(msg); setTimeout(()=>setNotif(null),2800); };
 
+  const setCAForDate = (date, value) => {
+    setRd(p => {
+      const day = p.historique[date] || { ca: 0, depenses: [] };
+      return { ...p, historique: { ...p.historique, [date]: { ...day, ca: value } } };
+    });
+  };
+
   const updateCA = () => {
     const v = parseFloat(caInput);
     if (!isNaN(v)&&v>=0) {
-      const today = (()=>{const d=new Date();if(d.getHours()<10)d.setDate(d.getDate()-1);return d.toISOString().split("T")[0];})();
-      setRd(p=>({...p, caJour:v, historique:{...p.historique,[today]:{...p.historique[today],ca:v,depenses:p.depenses}}}));
+      setCAForDate(todayStr, v);
       setCaInput(""); notify("CA mis à jour ✓");
     }
   };
 
-  // Scanner
+  const saveCalCA = () => {
+    const v = parseFloat(calCaInput);
+    if (!isNaN(v) && v>=0 && calSelectedDay) {
+      setCAForDate(calSelectedDay, v);
+      setCalCaInput("");
+      notify(`CA du ${calSelectedDay} mis à jour ✓`);
+    }
+  };
+
   const handleScan = async (e) => {
     const file = e.target.files[0]; if(!file) return;
     setScanning(true); setScanResult(null);
@@ -161,7 +187,7 @@ export default function MakDal() {
       const txt = data.content.map(i=>i.text||"").join("").replace(/```json|```/g,"").trim();
       const parsed = JSON.parse(txt);
       const produitsStr = (parsed.produits||[]).map(p=>`${p.nom}${p.quantite?" x"+p.quantite:""} — ${p.prix_total||p.prix_unitaire||0} DH`).join(", ");
-      setDepForm({fournisseur:parsed.fournisseur||"",montant:String(parsed.montant_total||""),categorie:parsed.categorie||"Autre",produits:produitsStr,date:parsed.date||new Date().toISOString().split("T")[0]});
+      setDepForm({fournisseur:parsed.fournisseur||"",montant:String(parsed.montant_total||""),categorie:parsed.categorie||"Autre",produits:produitsStr,date:parsed.date||todayStr});
       setScanResult(parsed);
       setDepModal("add");
     } catch {
@@ -170,7 +196,6 @@ export default function MakDal() {
     setScanning(false); e.target.value="";
   };
 
-  // Employees CRUD
   const saveEmp = () => {
     if (!empForm.name.trim()) return;
     if (empModal==="add") setRd(p=>({...p,employees:[...p.employees,{...empForm,id:Date.now(),present:true}]}));
@@ -180,17 +205,34 @@ export default function MakDal() {
   const deleteEmp = (id) => { setRd(p=>({...p,employees:p.employees.filter(e=>e.id!==id)})); setEmpModal(null); notify("Supprimé"); };
   const togglePresence = (id) => setRd(p=>({...p,employees:p.employees.map(e=>e.id===id?{...e,present:!e.present}:e)}));
 
-  // Depenses CRUD
   const saveDep = () => {
     if (!depForm.fournisseur.trim()||!depForm.montant) return;
-    const entry = {...depForm,montant:Number(depForm.montant),produits:depForm.produits.split(",").map(s=>s.trim()).filter(Boolean)};
-    if (depModal==="add") setRd(p=>({...p,depenses:[...p.depenses,{...entry,id:Date.now()}]}));
-    else setRd(p=>({...p,depenses:p.depenses.map(d=>d.id===depModal.id?{...entry,id:depModal.id}:d)}));
+    const targetDate = depForm.date || todayStr;
+    const entry = {...depForm, date: targetDate, montant:Number(depForm.montant),produits:depForm.produits.split(",").map(s=>s.trim()).filter(Boolean)};
+    setRd(p => {
+      const newHist = { ...p.historique };
+      if (depModal !== "add") {
+        const oldDate = depModal.date;
+        const oldDay = newHist[oldDate];
+        if (oldDay) {
+          newHist[oldDate] = { ...oldDay, depenses: oldDay.depenses.filter(d => d.id !== depModal.id) };
+        }
+      }
+      const id = depModal === "add" ? Date.now() : depModal.id;
+      const day = newHist[targetDate] || { ca: 0, depenses: [] };
+      newHist[targetDate] = { ...day, depenses: [...day.depenses, { ...entry, id }] };
+      return { ...p, historique: newHist };
+    });
     notify(depModal==="add"?"Dépense ajoutée ✓":"Modifiée ✓"); setDepModal(null);
   };
-  const deleteDep = (id) => { setRd(p=>({...p,depenses:p.depenses.filter(d=>d.id!==id)})); setDepModal(null); notify("Supprimé"); };
+  const deleteDep = (date, id) => {
+    setRd(p => {
+      const day = p.historique[date] || { ca: 0, depenses: [] };
+      return { ...p, historique: { ...p.historique, [date]: { ...day, depenses: day.depenses.filter(d=>d.id!==id) } } };
+    });
+    setDepModal(null); notify("Supprimé");
+  };
 
-  // Avances CRUD
   const saveAvance = () => {
     if (!avanceForm.empId||!avanceForm.montant) return;
     const entry = {...avanceForm,montant:Number(avanceForm.montant),rembourse:false};
@@ -234,7 +276,6 @@ export default function MakDal() {
 
       {notif && <div className="fade" style={{position:"fixed",top:20,left:"50%",transform:"translateX(-50%)",zIndex:999,background:resto.color,color:"white",padding:"11px 22px",borderRadius:40,fontWeight:700,fontSize:13,boxShadow:`0 6px 24px ${resto.color}55`,whiteSpace:"nowrap"}}>{notif}</div>}
 
-      {/* Header */}
       <div style={{background:C.white,borderBottom:`1.5px solid ${C.border}`,padding:"12px 16px",position:"sticky",top:0,zIndex:100}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
           <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -246,7 +287,6 @@ export default function MakDal() {
           </div>
         </div>
 
-        {/* Switcher restaurant */}
         <div style={{display:"flex",background:C.grayLight,borderRadius:12,padding:3,gap:3}}>
           {RESTAURANTS.map(r=>(
             <button key={r.id} onClick={()=>setActiveResto(r.id)}
@@ -261,9 +301,7 @@ export default function MakDal() {
 
       <div style={{padding:"16px 16px",maxWidth:500,margin:"0 auto"}}>
 
-        {/* ── DASHBOARD ── */}
         {page==="dashboard" && <div className="fade">
-          {/* Hero */}
           <div style={{background:`linear-gradient(135deg,${resto.color},${C.magentaDark})`,borderRadius:20,padding:20,marginBottom:16,position:"relative",overflow:"hidden",color:"white"}}>
             <div style={{position:"absolute",right:-20,top:-20,width:120,height:120,borderRadius:"50%",background:"rgba(255,255,255,.08)"}}/>
             <div style={{fontSize:12,opacity:.85,marginBottom:4}}>💰 CA du jour — {resto.emoji} {resto.label}</div>
@@ -276,16 +314,15 @@ export default function MakDal() {
             </div>
           </div>
 
-          {/* Saisie CA */}
           <div className="card" style={{marginBottom:16}}>
             <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>Mettre à jour le CA — {resto.emoji} {resto.label}</div>
+            <div style={{fontSize:11,color:C.gray,marginBottom:8}}>S'applique à aujourd'hui ({todayStr}). Pour une autre date, utilise le Calendrier dans Rapports.</div>
             <div style={{display:"flex",gap:8}}>
               <input type="number" placeholder="Ex: 5500" value={caInput} onChange={e=>setCaInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&updateCA()} style={{...inpStyle,flex:1}}/>
               <button className="btn" onClick={updateCA} style={{background:resto.color,padding:"12px 18px"}}>OK</button>
             </div>
           </div>
 
-          {/* KPIs */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
             <div className="card" style={{borderLeft:`4px solid ${C.green}`}}>
               <div style={{fontSize:11,color:C.gray,marginBottom:4}}>Bénéfice net</div>
@@ -298,7 +335,6 @@ export default function MakDal() {
             </div>
           </div>
 
-          {/* Ratio */}
           {caVal>0 && (()=>{
             const ratio = Math.round(totalDep*100/caVal);
             const color = ratio<=30?C.green:ratio<=50?C.yellow:C.red;
@@ -322,7 +358,6 @@ export default function MakDal() {
             );
           })()}
 
-          {/* Graphe */}
           <div className="card" style={{marginBottom:16}}>
             <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>📅 CA cette semaine — {resto.emoji} {resto.label}</div>
             <div style={{display:"flex",alignItems:"flex-end",gap:6,height:90}}>
@@ -341,10 +376,9 @@ export default function MakDal() {
             </div>
           </div>
 
-          {/* Dernières dépenses */}
           <div className="card">
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
-              <div style={{fontSize:13,fontWeight:700}}>🧾 Dernières dépenses</div>
+              <div style={{fontSize:13,fontWeight:700}}>🧾 Dernières dépenses — aujourd'hui</div>
               <button className="btn-ghost" onClick={()=>setPage("depenses")}>Tout voir</button>
             </div>
             {depenses.length===0
@@ -362,13 +396,12 @@ export default function MakDal() {
           </div>
         </div>}
 
-        {/* ── DÉPENSES ── */}
         {page==="depenses" && <div className="fade">
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
             <h2 style={{fontSize:20,fontWeight:800}}>Dépenses {resto.emoji}</h2>
             <div style={{display:"flex",gap:8}}>
               <button className="btn-ghost" style={{fontSize:12}} onClick={()=>fileRef.current.click()}>{scanning?"⏳":"📷"} Scanner</button>
-              <button className="btn" onClick={()=>{setDepForm(emptyDep);setScanResult(null);setDepModal("add");}} style={{fontSize:13,padding:"10px 14px",background:resto.color}}>+ Ajouter</button>
+              <button className="btn" onClick={()=>{setDepForm({...emptyDep,date:todayStr});setScanResult(null);setDepModal("add");}} style={{fontSize:13,padding:"10px 14px",background:resto.color}}>+ Ajouter</button>
             </div>
             <input ref={fileRef} type="file" accept="image/*" style={{display:"none"}} onChange={handleScan}/>
           </div>
@@ -380,13 +413,13 @@ export default function MakDal() {
           </div>}
 
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"13px 16px",background:C.white,borderRadius:14,marginBottom:16,border:`1.5px solid ${C.border}`}}>
-            <span style={{color:C.gray,fontSize:13,fontWeight:600}}>Total aujourd'hui</span>
+            <span style={{color:C.gray,fontSize:13,fontWeight:600}}>Total aujourd'hui ({todayStr})</span>
             <span style={{color:C.red,fontWeight:800,fontSize:20}}>{totalDep.toLocaleString()} DH</span>
           </div>
 
           {depenses.length===0 && <div className="card" style={{textAlign:"center",padding:"40px 20px",color:C.gray}}>
             <div style={{fontSize:36,marginBottom:12}}>🧾</div>
-            <div style={{fontWeight:700,marginBottom:6}}>Aucune dépense</div>
+            <div style={{fontWeight:700,marginBottom:6}}>Aucune dépense aujourd'hui</div>
             <div style={{fontSize:13}}>+ Ajouter ou scanner une facture</div>
           </div>}
 
@@ -402,7 +435,7 @@ export default function MakDal() {
                   <div style={{color:C.red,fontWeight:800,fontSize:16,marginBottom:6}}>-{Number(d.montant).toLocaleString()} DH</div>
                   <div style={{display:"flex",gap:6}}>
                     <button className="btn-ghost" style={{padding:"5px 10px",fontSize:12}} onClick={()=>{setDepForm({...d,produits:Array.isArray(d.produits)?d.produits.join(", "):d.produits});setDepModal(d);}}>✏️</button>
-                    <button className="btn-red" style={{padding:"5px 10px",fontSize:12}} onClick={()=>setConfirmDel({type:"dep",id:d.id})}>🗑</button>
+                    <button className="btn-red" style={{padding:"5px 10px",fontSize:12}} onClick={()=>setConfirmDel({type:"dep",id:d.id,date:d.date})}>🗑</button>
                   </div>
                 </div>
               </div>
@@ -415,7 +448,6 @@ export default function MakDal() {
           ))}
         </div>}
 
-        {/* ── PERSONNEL ── */}
         {page==="personnel" && <div className="fade">
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
             <h2 style={{fontSize:20,fontWeight:800}}>Équipes {resto.emoji}</h2>
@@ -553,7 +585,6 @@ export default function MakDal() {
           </>}
         </div>}
 
-        {/* ── RAPPORTS ── */}
         {page==="rapports" && <div className="fade">
           <h2 style={{fontSize:20,fontWeight:800,marginBottom:16}}>Rapports {resto.emoji} {resto.label}</h2>
 
@@ -565,15 +596,14 @@ export default function MakDal() {
             ))}
           </div>
 
-          {/* Calendrier */}
           {activeRapportTab==="calendrier" && (()=>{
             const {year,month} = calMonth;
             const moisNoms = ["Janvier","Février","Mars","Avril","Mai","Juin","Juillet","Août","Septembre","Octobre","Novembre","Décembre"];
             const firstDayFR = (new Date(year,month,1).getDay()+6)%7;
             const daysInMonth = new Date(year,month+1,0).getDate();
-            const todayStr = (()=>{const d=new Date();if(d.getHours()<10)d.setDate(d.getDate()-1);return d.toISOString().split("T")[0];})();
             const pad = n=>String(n).padStart(2,"0");
-            const selectedData = calSelectedDay?historique[calSelectedDay]:null;
+            const selectedData = calSelectedDay ? (historique[calSelectedDay] || { ca:0, depenses:[] }) : null;
+            const selDepTotal = selectedData ? selectedData.depenses.reduce((s,d)=>s+Number(d.montant),0) : 0;
             return <>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
                 <button onClick={()=>setCalMonth(p=>{const d=new Date(p.year,p.month-1,1);return{year:d.getFullYear(),month:d.getMonth()};})}
@@ -594,7 +624,11 @@ export default function MakDal() {
                   const isToday=dateStr===todayStr;
                   const isSelected=dateStr===calSelectedDay;
                   return (
-                    <div key={day} onClick={()=>setCalSelectedDay(isSelected?null:dateStr)}
+                    <div key={day} onClick={()=>{
+                        const next = isSelected ? null : dateStr;
+                        setCalSelectedDay(next);
+                        setCalCaInput(next && historique[next]?.ca ? String(historique[next].ca) : "");
+                      }}
                       style={{aspectRatio:"1",borderRadius:10,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",cursor:"pointer",
                         background:isSelected?resto.color:isToday?C.magentaPale:hasData?"#FFF0F7":C.white,
                         border:`1.5px solid ${isSelected?resto.color:isToday?resto.color:hasData?C.magentaLight:C.border}`}}>
@@ -607,37 +641,46 @@ export default function MakDal() {
               {calSelectedDay && (
                 <div className="card fade" style={{borderColor:resto.color,borderWidth:2}}>
                   <div style={{fontWeight:800,fontSize:15,color:resto.color,marginBottom:12}}>
-                    📅 {new Date(calSelectedDay+"T12:00:00").toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long"})}
+                    📅 {new Date(calSelectedDay+"T12:00:00").toLocaleDateString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric"})}
                   </div>
-                  {selectedData ? <>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:14}}>
-                      {[["CA",selectedData.ca,C.magenta,"💰"],["Dépenses",selectedData.depenses?.reduce((s,d)=>s+Number(d.montant),0)||0,C.red,"📤"],["Bénéfice",(selectedData.ca||0)-(selectedData.depenses?.reduce((s,d)=>s+Number(d.montant),0)||0),C.green,"✅"]].map(([label,val,color,icon])=>(
-                        <div key={label} style={{background:C.grayLight,borderRadius:12,padding:10,textAlign:"center"}}>
-                          <div style={{fontSize:14}}>{icon}</div>
-                          <div style={{fontSize:14,fontWeight:800,color}}>{Number(val).toLocaleString()}</div>
-                          <div style={{fontSize:10,color:C.gray}}>DH • {label}</div>
+
+                  <div style={{display:"flex",gap:8,marginBottom:16}}>
+                    <input type="number" placeholder="CA de ce jour (DH)" value={calCaInput} onChange={e=>setCalCaInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveCalCA()} style={{...inpStyle,flex:1}}/>
+                    <button className="btn" style={{background:resto.color}} onClick={saveCalCA}>Enregistrer</button>
+                  </div>
+
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:14}}>
+                    {[["CA",selectedData.ca||0,C.magenta,"💰"],["Dépenses",selDepTotal,C.red,"📤"],["Bénéfice",(selectedData.ca||0)-selDepTotal,C.green,"✅"]].map(([label,val,color,icon])=>(
+                      <div key={label} style={{background:C.grayLight,borderRadius:12,padding:10,textAlign:"center"}}>
+                        <div style={{fontSize:14}}>{icon}</div>
+                        <div style={{fontSize:14,fontWeight:800,color}}>{Number(val).toLocaleString()}</div>
+                        <div style={{fontSize:10,color:C.gray}}>DH • {label}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                    <div style={{fontSize:12,fontWeight:700}}>Dépenses de ce jour :</div>
+                    <button className="btn-ghost" style={{fontSize:11}} onClick={()=>{setDepForm({...emptyDep,date:calSelectedDay});setScanResult(null);setDepModal("add");}}>+ Ajouter</button>
+                  </div>
+                  {selectedData.depenses.length===0
+                    ? <div style={{textAlign:"center",color:C.gray,fontSize:12.5,padding:"12px 0"}}>Aucune dépense ce jour-là</div>
+                    : selectedData.depenses.map((d,i)=>(
+                      <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:i<selectedData.depenses.length-1?`1px solid ${C.border}`:"none",fontSize:13}}>
+                        <div><div style={{fontWeight:600}}>{d.fournisseur}</div><div style={{fontSize:11,color:C.gray}}>{d.categorie}</div></div>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <span style={{color:C.red,fontWeight:700}}>{Number(d.montant).toLocaleString()} DH</span>
+                          <button className="btn-ghost" style={{padding:"4px 8px",fontSize:11}} onClick={()=>{setDepForm({...d,produits:Array.isArray(d.produits)?d.produits.join(", "):d.produits});setDepModal(d);}}>✏️</button>
+                          <button className="btn-red" style={{padding:"4px 8px",fontSize:11}} onClick={()=>setConfirmDel({type:"dep",id:d.id,date:d.date})}>🗑</button>
                         </div>
-                      ))}
-                    </div>
-                    {selectedData.depenses?.length>0 && <>
-                      <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>Dépenses :</div>
-                      {selectedData.depenses.map((d,i)=>(
-                        <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:i<selectedData.depenses.length-1?`1px solid ${C.border}`:"none",fontSize:13}}>
-                          <div><div style={{fontWeight:600}}>{d.fournisseur}</div><div style={{fontSize:11,color:C.gray}}>{d.categorie}</div></div>
-                          <div style={{color:C.red,fontWeight:700}}>{Number(d.montant).toLocaleString()} DH</div>
-                        </div>
-                      ))}
-                    </>}
-                  </> : <div style={{textAlign:"center",color:C.gray,padding:"20px 0"}}>
-                    <div style={{fontSize:28,marginBottom:8}}>📭</div>
-                    <div style={{fontSize:13,fontWeight:600}}>Aucune donnée pour ce jour</div>
-                  </div>}
+                      </div>
+                    ))
+                  }
                 </div>
               )}
             </>;
           })()}
 
-          {/* Stats */}
           {activeRapportTab==="stats" && <>
             <div style={{display:"flex",gap:8,marginBottom:16}}>
               {["Semaine","Mois","Année"].map(p=>(
@@ -676,7 +719,7 @@ export default function MakDal() {
             </div>
 
             <div className="card" style={{marginBottom:16}}>
-              <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>📦 Dépenses par catégorie</div>
+              <div style={{fontSize:13,fontWeight:700,marginBottom:14}}>📦 Dépenses par catégorie — aujourd'hui</div>
               {depenses.length===0
                 ? <div style={{textAlign:"center",color:C.gray,fontSize:13,padding:"12px 0"}}>Aucune dépense</div>
                 : (()=>{
@@ -716,7 +759,6 @@ export default function MakDal() {
         </div>}
       </div>
 
-      {/* Nav */}
       <div style={{position:"fixed",bottom:0,left:0,right:0,background:C.white,borderTop:`1.5px solid ${C.border}`,display:"flex",justifyContent:"space-around",padding:"10px 0 18px"}}>
         {nav.map(n=>(
           <button key={n.id} onClick={()=>setPage(n.id)} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",padding:"4px 12px",position:"relative"}}>
@@ -727,7 +769,6 @@ export default function MakDal() {
         ))}
       </div>
 
-      {/* Modal Employé */}
       {empModal && <Modal title={empModal==="add"?"Nouvel employé":"Modifier"} onClose={()=>setEmpModal(null)}>
         <Field label="Prénom / Nom"><input type="text" placeholder="Ex: Amine" value={empForm.name} onChange={e=>setEmpForm(p=>({...p,name:e.target.value}))} style={inpStyle}/></Field>
         <Field label="Poste">{selEl(empForm.role,v=>setEmpForm(p=>({...p,role:v})),ROLES)}</Field>
@@ -747,21 +788,22 @@ export default function MakDal() {
         </div>
       </Modal>}
 
-      {/* Modal Dépense */}
       {depModal && <Modal title={depModal==="add"?"Nouvelle dépense":"Modifier"} onClose={()=>setDepModal(null)}>
         {scanResult && depModal==="add" && <div style={{background:C.magentaPale,borderRadius:12,padding:"10px 14px",marginBottom:14,fontSize:13,color:C.magentaDark,fontWeight:600}}>✅ Facture scannée — vérifie ci-dessous</div>}
         <Field label="Fournisseur"><input type="text" placeholder="Ex: Metro Cash" value={depForm.fournisseur} onChange={e=>setDepForm(p=>({...p,fournisseur:e.target.value}))} style={inpStyle}/></Field>
         <Field label="Montant total (DH)"><input type="number" placeholder="Ex: 850" value={depForm.montant} onChange={e=>setDepForm(p=>({...p,montant:e.target.value}))} style={inpStyle}/></Field>
         <Field label="Catégorie">{selEl(depForm.categorie,v=>setDepForm(p=>({...p,categorie:v})),CATS)}</Field>
-        <Field label="Date"><input type="date" value={depForm.date} onChange={e=>setDepForm(p=>({...p,date:e.target.value}))} style={inpStyle}/></Field>
+        <Field label="Date">
+          <input type="date" value={depForm.date} onChange={e=>setDepForm(p=>({...p,date:e.target.value}))} style={inpStyle}/>
+        </Field>
+        <div style={{fontSize:11,color:C.gray,marginTop:-8,marginBottom:14}}>Cette dépense sera comptabilisée sur la date choisie ci-dessus.</div>
         <Field label="Produits (séparés par virgules)"><input type="text" placeholder="Pain burger x100, Fromage 4kg..." value={depForm.produits} onChange={e=>setDepForm(p=>({...p,produits:e.target.value}))} style={inpStyle}/></Field>
         <div style={{display:"flex",gap:8,marginTop:6}}>
           <button className="btn" style={{flex:1,background:resto.color}} onClick={saveDep}>Enregistrer</button>
-          {depModal!=="add" && <button className="btn-red" onClick={()=>deleteDep(depModal.id)}>Supprimer</button>}
+          {depModal!=="add" && <button className="btn-red" onClick={()=>deleteDep(depModal.date, depModal.id)}>Supprimer</button>}
         </div>
       </Modal>}
 
-      {/* Modal Avance */}
       {avanceModal && <Modal title={avanceModal==="add"?"Nouvelle avance":"Modifier"} onClose={()=>setAvanceModal(null)}>
         <Field label="Employé">
           <select value={avanceForm.empId} onChange={e=>setAvanceForm(p=>({...p,empId:e.target.value}))} style={inpStyle}>
@@ -786,13 +828,12 @@ export default function MakDal() {
         </div>
       </Modal>}
 
-      {/* Confirm Delete */}
       {confirmDel && <Modal title="Confirmer la suppression" onClose={()=>setConfirmDel(null)}>
         <div style={{fontSize:14,color:C.gray,marginBottom:20}}>Es-tu sûr ? Cette action est irréversible.</div>
         <div style={{display:"flex",gap:8}}>
           <button className="btn-red" style={{flex:1,padding:"13px"}} onClick={()=>{
             if(confirmDel.type==="emp") deleteEmp(confirmDel.id);
-            else if(confirmDel.type==="dep") deleteDep(confirmDel.id);
+            else if(confirmDel.type==="dep") deleteDep(confirmDel.date, confirmDel.id);
             setConfirmDel(null);
           }}>Supprimer</button>
           <button className="btn-ghost" style={{flex:1,padding:"13px"}} onClick={()=>setConfirmDel(null)}>Annuler</button>
