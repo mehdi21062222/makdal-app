@@ -4,17 +4,7 @@ const C = {
   bg:"#FFF5F7", white:"#FFFFFF", magenta:"#E91E8C", magentaLight:"#F06AAD",
   magentaPale:"#FCE4F1", magentaDark:"#B5166E", black:"#1A1A2E", blackSoft:"#2D2D44",
   gray:"#6B6B80", grayLight:"#F0EEF5", border:"#F0D6E8", green:"#10B981",
-  red:"#F43F5E", yellow:"#FBBF24", purple:"#8B5CF6",
-};
 
-const RESTAURANTS = [
-  { id:"oujda",  label:"Oujda",  emoji:"🏙️", color:C.magenta },
-  { id:"saidia", label:"Saïdia", emoji:"🏖️", color:"#0EA5E9" },
-];
-
-const CAT_COLORS = {
-  "Fournisseurs alimentaires":C.magenta,
-  "Gaz / Énergie":C.yellow,
   "Emballages / Consommables":C.purple,
   "Loyer / Charges fixes":C.green,
   "Autre":C.gray,
